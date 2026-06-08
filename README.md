@@ -1,4 +1,4 @@
-# NTE-DriveBlock-Solver (异环驱动快排列组合解算器)
+# NTE-DriveBlock-Solver (异环驱动块排列组合解算器)
 
 ![Python Version](https://img.shields.io/badge/python-3.6+-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
