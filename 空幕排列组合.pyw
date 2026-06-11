@@ -1,5 +1,7 @@
 import tkinter as tk
 from tkinter import messagebox
+import json
+import os
 
 # ==================== 1. 严格定义形状库 ====================
 # 严格按照截图中的方块定义，绝对不进行任何旋转和翻转！
@@ -144,9 +146,14 @@ class PuzzleApp:
         self.cell_size = 45
         self.board_state = [[True for _ in range(self.grid_size)] for _ in range(self.grid_size)]
         self.required_shapes = []
-        self.is_erasing = False # 【修复Bug】：用于记录拖拽时是涂灰还是擦除
+        self.is_erasing = False
+        
+        self.config_file = "puzzle_config.json"
+        self.shape_buttons = {} # 用于存储形状按钮的引用，以便动态修改状态
         
         self.setup_ui()
+        self.load_config() # 启动时加载配置
+        self.update_ui_state() # 初始化UI状态
 
     def setup_ui(self):
         # 左侧：画布
@@ -158,13 +165,18 @@ class PuzzleApp:
         self.canvas.pack()
         self.canvas.bind("<ButtonPress-1>", self.toggle_cell)
         self.canvas.bind("<B1-Motion>", self.draw_cell)
+        self.canvas.bind("<ButtonRelease-1>", self.on_drag_release) # 拖拽结束后保存配置
         self.draw_grid()
 
         # 中间：必选形状与优先级控制
         mid_frame = tk.Frame(self.root, padx=10, pady=10)
         mid_frame.pack(side=tk.LEFT, fill=tk.Y)
 
-        tk.Label(mid_frame, text="2. 添加套装必选形状", font=("Arial", 11, "bold")).pack(pady=5)
+        tk.Label(mid_frame, text="2. 添加套装必选形状", font=("Arial", 11, "bold")).pack(pady=(5, 0))
+        
+        # 剩余格子提示标签
+        self.lbl_remaining = tk.Label(mid_frame, text="剩余可用格子数: 25", font=("Arial", 9), fg="blue")
+        self.lbl_remaining.pack(pady=(0, 5))
         
         # 形状选择按钮 (按类型分组显示)
         shape_btns_frame = tk.Frame(mid_frame)
@@ -172,7 +184,9 @@ class PuzzleApp:
         
         row, col = 0, 0
         for name in SPECIFIC_SHAPES.keys():
-            tk.Button(shape_btns_frame, text=name, width=8, command=lambda n=name: self.add_required(n)).grid(row=row, column=col, padx=2, pady=2)
+            btn = tk.Button(shape_btns_frame, text=name, width=8, command=lambda n=name: self.add_required(n))
+            btn.grid(row=row, column=col, padx=2, pady=2)
+            self.shape_buttons[name] = btn # 保存按钮引用
             col += 1
             if col > 2:  # 每行3个按钮
                 col = 0
@@ -182,13 +196,17 @@ class PuzzleApp:
         self.req_listbox = tk.Listbox(mid_frame, height=6, width=25)
         self.req_listbox.pack()
         
-        tk.Button(mid_frame, text="清空已选", command=self.clear_required).pack(pady=5)
+        # 列表操作按钮区
+        list_btn_frame = tk.Frame(mid_frame)
+        list_btn_frame.pack(pady=5)
+        tk.Button(list_btn_frame, text="删除选中", command=self.delete_selected).pack(side=tk.LEFT, padx=5)
+        tk.Button(list_btn_frame, text="清空已选", command=self.clear_required).pack(side=tk.LEFT, padx=5)
 
         tk.Label(mid_frame, text="3. 剩余空间填充优先级", font=("Arial", 11, "bold")).pack(pady=(15, 5))
         self.priority_var = tk.IntVar(value=3)
-        tk.Radiobutton(mid_frame, text="优先 II型 (2格)", variable=self.priority_var, value=2).pack(anchor=tk.W)
-        tk.Radiobutton(mid_frame, text="优先 III型 (3格)", variable=self.priority_var, value=3).pack(anchor=tk.W)
-        tk.Radiobutton(mid_frame, text="优先 IV型 (4格)", variable=self.priority_var, value=4).pack(anchor=tk.W)
+        tk.Radiobutton(mid_frame, text="优先 II型 (2格)", variable=self.priority_var, value=2, command=self.save_config).pack(anchor=tk.W)
+        tk.Radiobutton(mid_frame, text="优先 III型 (3格)", variable=self.priority_var, value=3, command=self.save_config).pack(anchor=tk.W)
+        tk.Radiobutton(mid_frame, text="优先 IV型 (4格)", variable=self.priority_var, value=4, command=self.save_config).pack(anchor=tk.W)
 
         tk.Button(mid_frame, text="开始组合 (最多10种)", command=self.run_solver, bg="#4CAF50", fg="white", font=("Arial", 12, "bold"), pady=5).pack(fill=tk.X, pady=20)
 
@@ -199,6 +217,61 @@ class PuzzleApp:
         tk.Label(right_frame, text="组合结果 (前10种):", font=("Arial", 11, "bold")).pack(anchor=tk.W, pady=5)
         self.result_frame = tk.Frame(right_frame)
         self.result_frame.pack(fill=tk.BOTH, expand=True)
+
+    def load_config(self):
+        """从本地加载配置文件"""
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                self.board_state = data.get("board_state", self.board_state)
+                self.required_shapes = data.get("required_shapes", [])
+                self.priority_var.set(data.get("priority", 3))
+                
+                # 恢复列表框显示
+                self.req_listbox.delete(0, tk.END)
+                for req in self.required_shapes:
+                    self.req_listbox.insert(tk.END, req)
+                
+                self.draw_grid()
+            except Exception as e:
+                print(f"读取配置失败: {e}")
+
+    def save_config(self):
+        """保存当前状态到本地配置文件"""
+        data = {
+            "board_state": self.board_state,
+            "required_shapes": self.required_shapes,
+            "priority": self.priority_var.get()
+        }
+        try:
+            with open(self.config_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"保存配置失败: {e}")
+
+    def update_ui_state(self):
+        """更新剩余格子提示，并动态禁用不可用的形状按钮"""
+        # 计算空幕总可用格子
+        total_available = sum(1 for r in range(self.grid_size) for c in range(self.grid_size) if self.board_state[r][c])
+        # 计算已选形状占用的格子
+        used_cells = sum(int(name[0]) for name in self.required_shapes)
+        # 剩余格子
+        rem_cells = total_available - used_cells
+        
+        # 更新提示文本
+        if rem_cells < 0:
+            self.lbl_remaining.config(text=f"空间不足！超出 {-rem_cells} 格", fg="red")
+        else:
+            self.lbl_remaining.config(text=f"剩余可用格子数: {rem_cells}", fg="blue")
+            
+        # 动态更新按钮状态
+        for name, btn in self.shape_buttons.items():
+            shape_size = int(name[0])
+            if shape_size > rem_cells:
+                btn.config(state=tk.DISABLED)
+            else:
+                btn.config(state=tk.NORMAL)
 
     def draw_grid(self):
         self.canvas.delete("all")
@@ -212,26 +285,71 @@ class PuzzleApp:
     def toggle_cell(self, event):
         c, r = event.x // self.cell_size, event.y // self.cell_size
         if 0 <= r < self.grid_size and 0 <= c < self.grid_size:
-            # 【修复Bug】：记录按下的瞬间是想涂灰还是擦除
             self.is_erasing = not self.board_state[r][c] 
             self.board_state[r][c] = self.is_erasing
             self.draw_grid()
+            self.update_ui_state()
+            self.save_config()
 
     def draw_cell(self, event):
         c, r = event.x // self.cell_size, event.y // self.cell_size
         if 0 <= r < self.grid_size and 0 <= c < self.grid_size:
-            # 【修复Bug】：拖拽时保持初始意图，实现丝滑滑动
             if self.board_state[r][c] != self.is_erasing:
                 self.board_state[r][c] = self.is_erasing
                 self.draw_grid()
+                self.update_ui_state()
+                # 注意：拖拽过程中不频繁保存文件，避免卡顿
+
+    def on_drag_release(self, event):
+        """拖拽结束后统一保存一次配置"""
+        self.save_config()
 
     def add_required(self, shape_name):
+        """添加新形状到列表，并自动选中和定位"""
         self.required_shapes.append(shape_name)
         self.req_listbox.insert(tk.END, shape_name)
+        
+        # 1. 清除当前列表中的所有选中状态（防止多选冲突）
+        self.req_listbox.selection_clear(0, tk.END)
+        # 2. 获取新添加项的索引（即最后一项）
+        new_index = len(self.required_shapes) - 1
+        # 3. 选中刚刚添加的新项
+        self.req_listbox.selection_set(new_index)
+        # 4. 自动滚动列表，确保新添加的项在可视范围内
+        self.req_listbox.see(new_index)
+        
+        self.update_ui_state()
+        self.save_config()
+
+    def delete_selected(self):
+        """删除列表框中当前选中的单个形状，并自动选中下一个或最后一个"""
+        selection = self.req_listbox.curselection()
+        if selection:
+            index = selection[0]
+            # 从UI列表和数据列表中删除
+            self.req_listbox.delete(index)
+            del self.required_shapes[index]
+            
+            # 清除可能残留的选中状态
+            self.req_listbox.selection_clear(0, tk.END)
+            
+            # 如果删除后列表还不为空，则自动选中
+            if self.required_shapes:
+                # 如果删除的是原本的最后一个，index 会等于现在的列表长度（越界）
+                # 此时让它选中现在的最后一个；否则选中当前 index 位置的新元素
+                new_index = index if index < len(self.required_shapes) else len(self.required_shapes) - 1
+                self.req_listbox.selection_set(new_index)
+                # 确保删除后，自动选中的那个元素也在可视范围内
+                self.req_listbox.see(new_index)
+                
+            self.update_ui_state()
+            self.save_config()
 
     def clear_required(self):
         self.required_shapes.clear()
         self.req_listbox.delete(0, tk.END)
+        self.update_ui_state()
+        self.save_config()
 
     def run_solver(self):
         board_cells = [(r, c) for r in range(self.grid_size) for c in range(self.grid_size) if self.board_state[r][c]]
